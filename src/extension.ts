@@ -4,6 +4,25 @@ import * as path from 'path';
 import * as https from 'https';
 import { VibeCheckSidebarProvider } from './VibeCheckSidebarProvider';
 
+const workspaceRootForEnv = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+type DotenvLike = {
+    config: (options?: { path?: string }) => void;
+};
+
+let dotenvModule: DotenvLike | undefined;
+try {
+    // Load dotenv if available so workspace-root .env values become process.env entries.
+    dotenvModule = require('dotenv') as DotenvLike;
+} catch {
+    dotenvModule = undefined;
+}
+
+dotenvModule?.config(
+    workspaceRootForEnv
+        ? { path: path.join(workspaceRootForEnv, '.env') }
+        : undefined
+);
+
 // Module-level variable to store our active blur decorations.
 // This allows the sidebar to clear them later.
 export let activeBlurDecorations: { editor: vscode.TextEditor; ranges: vscode.Range[] }[] = [];
@@ -105,11 +124,11 @@ function parseSocraticChallengeFromText(modelText: string): SocraticChallenge {
         throw new Error('Challenge JSON is missing a valid question.');
     }
 
-    if (!Array.isArray(parsed.options) || parsed.options.length < 2 || !parsed.options.every((option) => typeof option === 'string')) {
-        throw new Error('Challenge JSON is missing a valid options array.');
+    if (!Array.isArray(parsed.options) || parsed.options.length !== 4 || !parsed.options.every((option) => typeof option === 'string')) {
+        throw new Error('Challenge JSON must include an options array of exactly 4 strings.');
     }
 
-    if (typeof parsed.correctIndex !== 'number' || parsed.correctIndex < 0 || parsed.correctIndex >= parsed.options.length) {
+    if (typeof parsed.correctIndex !== 'number' || !Number.isInteger(parsed.correctIndex) || parsed.correctIndex < 0 || parsed.correctIndex >= parsed.options.length) {
         throw new Error('Challenge JSON has an invalid correctIndex.');
     }
 
@@ -206,15 +225,13 @@ async function callClaudePrimary(codeSnippet: string, userProvidedClaudeKey: str
 }
 
 export async function callGeminiFallback(codeSnippet: string): Promise<SocraticChallenge> {
-    const geminiApiKey =
-        process.env.GEMINI_API_KEY ??
-        process.env.GOOGLE_API_KEY ??
-        process.env.GOOGLE_GENAI_API_KEY;
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
 
-    if (!geminiApiKey || geminiApiKey.trim().length === 0) {
-        throw new Error('Gemini fallback key is not configured in environment variables.');
+    if (!geminiApiKey) {
+        throw new Error('GEMINI_API_KEY is not configured in .env at workspace root.');
     }
 
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
     const requestBody = JSON.stringify({
         system_instruction: {
             parts: [{ text: loadMasterSystemPrompt() }],
@@ -226,18 +243,32 @@ export async function callGeminiFallback(codeSnippet: string): Promise<SocraticC
             },
         ],
         generationConfig: {
-            temperature: 0,
+            responseMimeType: 'application/json',
         },
     });
 
-    const rawResponse = await postJsonWithTimeout(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(geminiApiKey)}`,
-        {
-            'content-type': 'application/json',
-            'content-length': Buffer.byteLength(requestBody),
-        },
-        requestBody
-    );
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 15000);
+
+    let rawResponse: string;
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: requestBody,
+            signal: controller.signal,
+        });
+
+        rawResponse = await response.text();
+
+        if (!response.ok) {
+            throw new Error(`Gemini API request failed (${response.status}): ${rawResponse}`);
+        }
+    } finally {
+        clearTimeout(timeoutHandle);
+    }
 
     const parsedResponse = JSON.parse(rawResponse) as {
         candidates?: Array<{
@@ -257,11 +288,15 @@ export async function callGeminiFallback(codeSnippet: string): Promise<SocraticC
 
 export async function generateSocraticChallenge(codeSnippet: string, userProvidedClaudeKey: string): Promise<SocraticChallenge> {
     try {
-        return await callClaudePrimary(codeSnippet, userProvidedClaudeKey);
+        const challenge = await callClaudePrimary(codeSnippet, userProvidedClaudeKey);
+        console.info('Vibe-Check API used: Claude');
+        return challenge;
     } catch (claudeError) {
         console.warn('Claude primary call failed, switching to Gemini fallback.', claudeError);
         try {
-            return await callGeminiFallback(codeSnippet);
+            const challenge = await callGeminiFallback(codeSnippet);
+            console.info('Vibe-Check API used: Gemini fallback');
+            return challenge;
         } catch (geminiError) {
             console.error('Gemini fallback also failed.', geminiError);
             throw new Error('Failed to generate Socratic challenge from both Claude and Gemini.');
