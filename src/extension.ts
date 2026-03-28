@@ -321,11 +321,12 @@ export async function generateSocraticChallenge(codeSnippet: string, userProvide
 // but we can use opacity and letter-spacing to visually approximate blurred/unreadable text,
 // along with the filter property in textDecoration.
 export const blurDecorationType = vscode.window.createTextEditorDecorationType({
-    textDecoration: 'none; filter: blur(5px);',
-    opacity: '0.15',
-    letterSpacing: '-1em',
+    textDecoration: 'none; filter: blur(3.5px) saturate(0.6);',
+    opacity: '0.55',
     cursor: 'not-allowed',
-    backgroundColor: 'rgba(255, 0, 0, 0.1)', // Slight red tint to indicate it's locked
+    backgroundColor: 'rgba(130, 130, 130, 0.18)',
+    border: '1px solid rgba(255, 140, 92, 0.5)',
+    borderRadius: '4px',
     isWholeLine: false,
 });
 
@@ -370,6 +371,9 @@ export function activate(context: vscode.ExtensionContext) {
         
         // Focus the sidebar
         vscode.commands.executeCommand('vibecheck.sidebarView.focus');
+
+        // Ask sidebar to generate challenge immediately so user sees the question right away.
+        sidebarProvider.notifyBlurApplied();
     });
 
     const emergencyBypassCommand = vscode.commands.registerCommand('vibecheck.emergencyBypass', () => {

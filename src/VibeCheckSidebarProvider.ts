@@ -9,6 +9,7 @@ import {
 export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
     private view: vscode.WebviewView | undefined;
     private currentChallenge: SocraticChallenge | undefined;
+    private pendingAutoGenerate = false;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -44,14 +45,24 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                 }
             }
         });
+
+        if (this.pendingAutoGenerate) {
+            this.pendingAutoGenerate = false;
+            this.view.webview.postMessage({ type: 'autoGenerateChallenge' });
+        }
+    }
+
+    public notifyBlurApplied(): void {
+        if (!this.view) {
+            this.pendingAutoGenerate = true;
+            return;
+        }
+
+        this.view.webview.postMessage({ type: 'autoGenerateChallenge' });
     }
 
     private async generateChallenge(apiKeyFromWebview: unknown): Promise<void> {
         const apiKey = typeof apiKeyFromWebview === 'string' ? apiKeyFromWebview.trim() : '';
-        if (!apiKey) {
-            this.postStatus('Please enter an Anthropic API key to generate a question.', 'error');
-            return;
-        }
 
         const blurredCode = getBlurredTextFromDecorations();
         if (!blurredCode) {
@@ -84,6 +95,10 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
             const message = error instanceof Error ? error.message : 'Failed to generate question.';
             console.error('[VIBE-CHECK DEBUG] Challenge generation failed:', error);
             this.postStatus(message, 'error');
+            this.view?.webview.postMessage({
+                type: 'challengeGenerationError',
+                message,
+            });
         }
     }
 
@@ -133,32 +148,66 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Vibe Check</title>
                 <style>
+                    :root {
+                        --card-bg-start: color-mix(in srgb, var(--vscode-editorWidget-background) 90%, #122233 10%);
+                        --card-bg-end: color-mix(in srgb, var(--vscode-editorWidget-background) 84%, #3b1e12 16%);
+                        --soft-border: color-mix(in srgb, var(--vscode-widget-border) 70%, #f29b63 30%);
+                        --muted: var(--vscode-descriptionForeground);
+                        --ok: var(--vscode-testing-iconPassed);
+                        --fail: var(--vscode-testing-iconFailed);
+                    }
                     body {
                         font-family: var(--vscode-font-family);
-                        padding: 16px;
+                        padding: 14px;
                         color: var(--vscode-editor-foreground);
                         background-color: var(--vscode-editor-background);
+                        margin: 0;
                     }
                     .card {
-                        background: var(--vscode-editorWidget-background);
-                        border: 1px solid var(--vscode-widget-border);
-                        border-radius: 6px;
+                        position: relative;
+                        overflow: hidden;
+                        background: linear-gradient(155deg, var(--card-bg-start), var(--card-bg-end));
+                        border: 1px solid var(--soft-border);
+                        border-radius: 10px;
                         padding: 16px;
-                        margin-bottom: 16px;
-                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                        margin-bottom: 12px;
+                        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.24);
+                    }
+                    .card::before {
+                        content: '';
+                        position: absolute;
+                        width: 180px;
+                        height: 180px;
+                        right: -70px;
+                        top: -90px;
+                        border-radius: 999px;
+                        background: radial-gradient(circle, rgba(242, 155, 99, 0.22), transparent 65%);
+                        pointer-events: none;
                     }
                     h2 {
                         margin-top: 0;
-                        font-size: 1.2em;
-                        color: var(--vscode-editorError-foreground);
+                        margin-bottom: 8px;
+                        font-size: 1.06em;
+                        letter-spacing: 0.02em;
+                        color: var(--vscode-editor-foreground);
                         display: flex;
                         align-items: center;
                         gap: 8px;
                     }
+                    .subtitle {
+                        margin: 0 0 12px;
+                        color: var(--muted);
+                        font-size: 0.85em;
+                        line-height: 1.35;
+                    }
                     .question {
                         font-size: 1em;
-                        line-height: 1.4;
-                        margin: 12px 0;
+                        line-height: 1.5;
+                        margin: 10px 0 8px;
+                        padding: 10px;
+                        border-radius: 8px;
+                        border: 1px dashed color-mix(in srgb, var(--soft-border) 80%, transparent 20%);
+                        background: color-mix(in srgb, var(--vscode-editor-background) 70%, transparent 30%);
                     }
                     .input {
                         width: 100%;
@@ -191,23 +240,31 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     .btn-danger {
                         background-color: var(--vscode-inputValidation-errorBackground);
                         color: var(--vscode-inputValidation-errorForeground);
-                        margin-top: 8px;
+                        margin-top: 10px;
                     }
                     .btn-danger:hover {
                         background-color: var(--vscode-inputValidation-errorBorder);
                     }
+                    .btn-secondary {
+                        margin-top: 8px;
+                    }
                     .options {
                         margin: 12px 0;
                         display: grid;
-                        gap: 8px;
+                        gap: 7px;
                     }
                     .option {
                         display: flex;
                         gap: 8px;
                         align-items: flex-start;
-                        padding: 8px;
-                        border: 1px solid var(--vscode-widget-border);
-                        border-radius: 4px;
+                        padding: 9px;
+                        border: 1px solid color-mix(in srgb, var(--vscode-widget-border) 75%, #f29b63 25%);
+                        border-radius: 7px;
+                        transition: border-color 0.15s ease, background-color 0.15s ease;
+                    }
+                    .option.selected {
+                        border-color: color-mix(in srgb, var(--vscode-focusBorder) 75%, #f29b63 25%);
+                        background: color-mix(in srgb, var(--vscode-editor-background) 80%, #f29b63 20%);
                     }
                     .hint {
                         font-size: 0.85em;
@@ -222,25 +279,63 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                         font-size: 0.9em;
                     }
                     .status.info {
-                        border-color: var(--vscode-widget-border);
+                        border-color: color-mix(in srgb, var(--vscode-widget-border) 78%, #5ba4ff 22%);
                     }
                     .status.success {
-                        border-color: var(--vscode-testing-iconPassed);
+                        border-color: var(--ok);
                     }
                     .status.error {
-                        border-color: var(--vscode-testing-iconFailed);
+                        border-color: var(--fail);
+                    }
+                    details.advanced {
+                        margin-top: 12px;
+                        border: 1px solid var(--vscode-widget-border);
+                        border-radius: 8px;
+                        background: color-mix(in srgb, var(--vscode-editor-background) 78%, transparent 22%);
+                        overflow: hidden;
+                    }
+                    details.advanced > summary {
+                        list-style: none;
+                        cursor: pointer;
+                        padding: 8px 10px;
+                        font-size: 0.86em;
+                        color: var(--muted);
+                        user-select: none;
+                        border-bottom: 1px solid transparent;
+                    }
+                    details.advanced[open] > summary {
+                        border-bottom-color: var(--vscode-widget-border);
+                    }
+                    .advanced-content {
+                        padding: 10px;
+                    }
+                    @media (max-width: 420px) {
+                        body {
+                            padding: 10px;
+                        }
+                        .card {
+                            padding: 12px;
+                        }
                     }
                 </style>
             </head>
             <body>
                 <div class="card">
                     <h2>Socratic Lock Active</h2>
-                    <input class="input" id="api-key" type="password" placeholder="Enter Anthropic API key" />
-                    <button class="btn" id="generate-btn">Generate Challenge</button>
+                    <p class="subtitle">Blurred code is locked until you choose the right answer. Questions generate automatically right after blur.</p>
 
-                    <p class="question" id="question-text">Generate a challenge to verify comprehension of the blurred code.</p>
+                    <p class="question" id="question-text">Waiting for blurred code. Trigger Vibe Check on a selected block.</p>
                     <div class="options" id="options"></div>
                     <button class="btn" id="submit-answer" disabled>Submit Answer</button>
+
+                    <details class="advanced" id="advanced-panel">
+                        <summary>Advanced: API key + manual regenerate</summary>
+                        <div class="advanced-content">
+                            <input class="input" id="api-key" type="password" placeholder="Optional Anthropic API key" />
+                            <button class="btn btn-secondary" id="generate-btn">Regenerate Challenge</button>
+                        </div>
+                    </details>
+
                     <button class="btn btn-danger" id="emergency-bypass">Emergency Bypass</button>
                     <p class="hint" id="explanation"></p>
                     <div class="status info" id="status">Waiting for a challenge.</div>
@@ -257,10 +352,27 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     const optionsContainer = document.getElementById('options');
                     const explanation = document.getElementById('explanation');
                     const status = document.getElementById('status');
+                    const advancedPanel = document.getElementById('advanced-panel');
+
+                    const STORAGE_KEY = 'vibecheck.anthropicApiKey';
+
+                    apiKeyInput.value = localStorage.getItem(STORAGE_KEY) || '';
+                    apiKeyInput.addEventListener('input', () => {
+                        localStorage.setItem(STORAGE_KEY, apiKeyInput.value);
+                    });
 
                     function setStatus(text, kind) {
                         status.textContent = text;
                         status.className = 'status ' + kind;
+                    }
+
+                    function requestChallenge() {
+                        submitButton.disabled = true;
+                        explanation.textContent = '';
+                        vscode.postMessage({
+                            type: 'generateChallenge',
+                            apiKey: apiKeyInput.value
+                        });
                     }
 
                     function renderOptions(options) {
@@ -275,6 +387,10 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                             radio.name = 'challengeOption';
                             radio.value = String(index);
                             radio.addEventListener('change', () => {
+                                optionsContainer.querySelectorAll('.option').forEach((node) => {
+                                    node.classList.remove('selected');
+                                });
+                                label.classList.add('selected');
                                 submitButton.disabled = false;
                             });
 
@@ -288,12 +404,7 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     }
 
                     generateButton.addEventListener('click', () => {
-                        submitButton.disabled = true;
-                        explanation.textContent = '';
-                        vscode.postMessage({
-                            type: 'generateChallenge',
-                            apiKey: apiKeyInput.value
-                        });
+                        requestChallenge();
                     });
 
                     submitButton.addEventListener('click', () => {
@@ -316,6 +427,12 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     window.addEventListener('message', (event) => {
                         const data = event.data;
 
+                        if (data.type === 'autoGenerateChallenge') {
+                            questionText.textContent = 'Generating a Socratic challenge from your blurred code...';
+                            optionsContainer.innerHTML = '';
+                            requestChallenge();
+                        }
+
                         if (data.type === 'renderChallenge') {
                             questionText.textContent = data.question;
                             renderOptions(data.options || []);
@@ -337,6 +454,12 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
 
                         if (data.type === 'status') {
                             setStatus(data.text, data.kind || 'info');
+                        }
+
+                        if (data.type === 'challengeGenerationError') {
+                            if (advancedPanel && !advancedPanel.open) {
+                                advancedPanel.open = true;
+                            }
                         }
 
                         if (data.type === 'challengeReset') {
