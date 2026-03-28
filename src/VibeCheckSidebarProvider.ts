@@ -59,11 +59,20 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
             return;
         }
 
+        console.log('[VIBE-CHECK DEBUG] Blurred code extracted:', blurredCode.substring(0, 50) + '...');
+        console.log('[VIBE-CHECK DEBUG] Calling generateSocraticChallenge...');
         this.postStatus('Generating Socratic question from Claude 3.5 Sonnet...', 'info');
 
         try {
             const challenge = await generateSocraticChallenge(blurredCode, apiKey);
+            console.log('[VIBE-CHECK DEBUG] Challenge received:', challenge);
             this.currentChallenge = challenge;
+
+            console.log('[VIBE-CHECK DEBUG] Posting renderChallenge message:', {
+                type: 'renderChallenge',
+                question: challenge.question,
+                options: challenge.options,
+            });
 
             this.view?.webview.postMessage({
                 type: 'renderChallenge',
@@ -73,6 +82,7 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
             this.postStatus('Question ready. Select one answer to unlock.', 'success');
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to generate question.';
+            console.error('[VIBE-CHECK DEBUG] Challenge generation failed:', error);
             this.postStatus(message, 'error');
         }
     }

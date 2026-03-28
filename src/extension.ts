@@ -4,7 +4,6 @@ import * as path from 'path';
 import * as https from 'https';
 import { VibeCheckSidebarProvider } from './VibeCheckSidebarProvider';
 
-const workspaceRootForEnv = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 type DotenvLike = {
     config: (options?: { path?: string }) => void;
 };
@@ -17,11 +16,16 @@ try {
     dotenvModule = undefined;
 }
 
-dotenvModule?.config(
-    workspaceRootForEnv
-        ? { path: path.join(workspaceRootForEnv, '.env') }
-        : undefined
-);
+function loadWorkspaceEnv(): void {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!dotenvModule || !workspaceRoot) {
+        return;
+    }
+
+    dotenvModule.config({
+        path: path.join(workspaceRoot, '.env'),
+    });
+}
 
 // Module-level variable to store our active blur decorations.
 // This allows the sidebar to clear them later.
@@ -225,7 +229,11 @@ async function callClaudePrimary(codeSnippet: string, userProvidedClaudeKey: str
 }
 
 export async function callGeminiFallback(codeSnippet: string): Promise<SocraticChallenge> {
-    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+    // Ensure .env is loaded in the active extension host process.
+    loadWorkspaceEnv();
+
+    // User-requested direct fallback key to avoid environment loading issues in Extension Host.
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || 'AIzaSyDKQsSWuGhQDuvtKI25d51tz2R5UuEozG0';
 
     if (!geminiApiKey) {
         throw new Error('GEMINI_API_KEY is not configured in .env at workspace root.');
@@ -292,14 +300,18 @@ export async function generateSocraticChallenge(codeSnippet: string, userProvide
         console.info('Vibe-Check API used: Claude');
         return challenge;
     } catch (claudeError) {
-        console.warn('Claude primary call failed, switching to Gemini fallback.', claudeError);
+        const claudeErrorMsg = claudeError instanceof Error ? claudeError.message : String(claudeError);
+        console.error('[CLAUDE ERROR]', claudeErrorMsg);
+        console.warn('Claude primary call failed, switching to Gemini fallback.');
         try {
             const challenge = await callGeminiFallback(codeSnippet);
             console.info('Vibe-Check API used: Gemini fallback');
             return challenge;
         } catch (geminiError) {
-            console.error('Gemini fallback also failed.', geminiError);
-            throw new Error('Failed to generate Socratic challenge from both Claude and Gemini.');
+            const geminiErrorMsg = geminiError instanceof Error ? geminiError.message : String(geminiError);
+            console.error('[GEMINI ERROR]', geminiErrorMsg);
+            console.error('Gemini fallback also failed.');
+            throw new Error(`Claude failed: ${claudeErrorMsg} | Gemini failed: ${geminiErrorMsg}`);
         }
     }
 }
@@ -320,6 +332,7 @@ export const blurDecorationType = vscode.window.createTextEditorDecorationType({
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "vibe-check-extenstion" is now active!');
     extensionRootPath = context.extensionUri.fsPath;
+    loadWorkspaceEnv();
 
     const redisImportTrigger = 'import redis';
 
