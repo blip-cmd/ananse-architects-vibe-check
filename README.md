@@ -43,7 +43,7 @@ To run Vibe-Check locally for testing:
 3. Open the project in VS Code.
 4. Press F5 to open a new Extension Development Host window.
 5. In the new window, open the Vibe-Check sidebar panel and enter your Anthropic API Key.
-6. Paste a complex block of code into the editor to trigger the Socratic Lock.
+6. Paste a complex block of code into the editor to trigger the Socratic Lock.03
 
 ## Team: Ananse Architects
 
@@ -51,4 +51,3 @@ To run Vibe-Check locally for testing:
 - Ryan Nii Akwei Brown
 
 AI is a tool. You are the engineer.
-

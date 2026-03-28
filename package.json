@@ -1,0 +1,52 @@
+{
+  "name": "vibe-check-extenstion",
+  "displayName": "Vibe Check",
+  "description": "Stop vibing, start engineering. A Socratic middleware that enforces developer comprehension of AI-generated code.",
+  "version": "0.0.1",
+  "publisher": "ananse-architects",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vibecheck.analyzeBlock",
+        "title": "Vibe Check: Analyze Block"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vibe-check-sidebar",
+          "title": "Vibe Check",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "vibe-check-sidebar": [
+        {
+          "type": "webview",
+          "id": "vibecheck.sidebarView",
+          "name": "Vibe Check"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
