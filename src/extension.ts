@@ -21,6 +21,8 @@ export const blurDecorationType = vscode.window.createTextEditorDecorationType({
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "vibe-check-extenstion" is now active!');
 
+    const redisImportTrigger = 'import redis';
+
     // Register the Vibe Check Sidebar Webview
     const sidebarProvider = new VibeCheckSidebarProvider(context.extensionUri);
     context.subscriptions.push(
@@ -57,7 +59,43 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('vibecheck.sidebarView.focus');
     });
 
+    const changeListener = vscode.workspace.onDidChangeTextDocument(async (event) => {
+        if (event.contentChanges.length === 0) {
+            return;
+        }
+
+        for (const change of event.contentChanges) {
+            if (!change.text.includes(redisImportTrigger)) {
+                continue;
+            }
+
+            const { document } = event;
+            const start = change.range.start;
+            const startOffset = document.offsetAt(start);
+            const end = document.positionAt(startOffset + change.text.length);
+            const detectedRange = new vscode.Range(start, end);
+
+            let editor = vscode.window.visibleTextEditors.find(
+                visibleEditor => visibleEditor.document.uri.toString() === document.uri.toString()
+            );
+
+            if (!editor) {
+                editor = await vscode.window.showTextDocument(document, {
+                    preview: false,
+                    preserveFocus: false,
+                });
+            }
+
+            editor.selection = new vscode.Selection(detectedRange.start, detectedRange.end);
+            editor.revealRange(detectedRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+
+            await vscode.commands.executeCommand('vibecheck.analyzeBlock');
+            break;
+        }
+    });
+
     context.subscriptions.push(analyzeCommand);
+    context.subscriptions.push(changeListener);
 }
 
 export function deactivate() {}
