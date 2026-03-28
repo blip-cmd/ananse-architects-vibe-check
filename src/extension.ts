@@ -5,6 +5,35 @@ import { VibeCheckSidebarProvider } from './VibeCheckSidebarProvider';
 // This allows the sidebar to clear them later.
 export let activeBlurDecorations: { editor: vscode.TextEditor; ranges: vscode.Range[] }[] = [];
 
+export function getBlurredTextFromDecorations(): string | undefined {
+    if (activeBlurDecorations.length === 0) {
+        return undefined;
+    }
+
+    // Prefer the most recently blurred block to match current user workflow.
+    const latest = activeBlurDecorations[activeBlurDecorations.length - 1];
+    const snippets = latest.ranges
+        .map((range) => latest.editor.document.getText(range))
+        .filter((snippet) => snippet.trim().length > 0);
+
+    if (snippets.length === 0) {
+        return undefined;
+    }
+
+    return snippets.join('\n');
+}
+
+export function clearActiveBlurDecorations(): void {
+    for (const { editor } of activeBlurDecorations) {
+        try {
+            editor.setDecorations(blurDecorationType, []);
+        } catch (e) {
+            console.error('Failed to clear decorations for an editor', e);
+        }
+    }
+    activeBlurDecorations.length = 0;
+}
+
 // Create the blur decoration type.
 // VS Code's decoration API does not strictly support arbitrary CSS that changes layout,
 // but we can use opacity and letter-spacing to visually approximate blurred/unreadable text,
