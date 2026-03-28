@@ -1,11 +1,20 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as https from 'https';
 import { VibeCheckSidebarProvider } from './VibeCheckSidebarProvider';
 
 // Module-level variable to store our active blur decorations.
 // This allows the sidebar to clear them later.
 export let activeBlurDecorations: { editor: vscode.TextEditor; ranges: vscode.Range[] }[] = [];
+let extensionRootPath: string | undefined;
+
+export type SocraticChallenge = {
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+};
 
 export function getBlurredTextFromDecorations(): string | undefined {
     if (activeBlurDecorations.length === 0) {
@@ -63,6 +72,203 @@ function appendEmergencyBypassDebtLog(editor: vscode.TextEditor): void {
     fs.appendFileSync(debtLogPath, row, 'utf8');
 }
 
+function loadMasterSystemPrompt(): string {
+    if (!extensionRootPath) {
+        throw new Error('Extension root path is not initialized.');
+    }
+
+    const promptFilePath = path.join(extensionRootPath, 'master-system-prompt.json');
+    const promptFileText = fs.readFileSync(promptFilePath, 'utf8');
+    const parsed = JSON.parse(promptFileText) as { system?: unknown };
+
+    if (typeof parsed.system !== 'string' || parsed.system.trim().length === 0) {
+        throw new Error('master-system-prompt.json is missing a valid system prompt.');
+    }
+
+    return parsed.system;
+}
+
+function parseSocraticChallengeFromText(modelText: string): SocraticChallenge {
+    const jsonMatch = modelText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+        throw new Error('Model response did not contain a JSON object.');
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as {
+        question?: unknown;
+        options?: unknown;
+        correctIndex?: unknown;
+        explanation?: unknown;
+    };
+
+    if (typeof parsed.question !== 'string' || parsed.question.trim().length === 0) {
+        throw new Error('Challenge JSON is missing a valid question.');
+    }
+
+    if (!Array.isArray(parsed.options) || parsed.options.length < 2 || !parsed.options.every((option) => typeof option === 'string')) {
+        throw new Error('Challenge JSON is missing a valid options array.');
+    }
+
+    if (typeof parsed.correctIndex !== 'number' || parsed.correctIndex < 0 || parsed.correctIndex >= parsed.options.length) {
+        throw new Error('Challenge JSON has an invalid correctIndex.');
+    }
+
+    if (typeof parsed.explanation !== 'string' || parsed.explanation.trim().length === 0) {
+        throw new Error('Challenge JSON is missing a valid explanation.');
+    }
+
+    return {
+        question: parsed.question,
+        options: parsed.options,
+        correctIndex: parsed.correctIndex,
+        explanation: parsed.explanation,
+    };
+}
+
+function postJsonWithTimeout(url: string, headers: Record<string, string | number>, body: string, timeoutMs = 15000): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const req = https.request(
+            url,
+            {
+                method: 'POST',
+                headers,
+            },
+            (res) => {
+                let responseData = '';
+                res.on('data', (chunk) => {
+                    responseData += chunk;
+                });
+                res.on('end', () => {
+                    if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+                        reject(new Error(`API request failed (${res.statusCode ?? 'unknown'}): ${responseData}`));
+                        return;
+                    }
+                    resolve(responseData);
+                });
+            }
+        );
+
+        req.setTimeout(timeoutMs, () => {
+            req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+        });
+
+        req.on('error', (err) => reject(err));
+        req.write(body);
+        req.end();
+    });
+}
+
+async function callClaudePrimary(codeSnippet: string, userProvidedClaudeKey: string): Promise<SocraticChallenge> {
+    const key = userProvidedClaudeKey.trim();
+    if (!key) {
+        throw new Error('Claude API key not provided.');
+    }
+
+    const requestBody = JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 600,
+        temperature: 0,
+        system: loadMasterSystemPrompt(),
+        messages: [
+            {
+                role: 'user',
+                content: [
+                    {
+                        type: 'text',
+                        text: codeSnippet,
+                    },
+                ],
+            },
+        ],
+    });
+
+    const rawResponse = await postJsonWithTimeout(
+        'https://api.anthropic.com/v1/messages',
+        {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(requestBody),
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+        },
+        requestBody
+    );
+
+    const parsedResponse = JSON.parse(rawResponse) as {
+        content?: Array<{ type?: string; text?: string }>;
+    };
+
+    const modelText = parsedResponse.content?.find((item) => item.type === 'text')?.text;
+    if (!modelText) {
+        throw new Error('Claude response did not include text content.');
+    }
+
+    return parseSocraticChallengeFromText(modelText);
+}
+
+export async function callGeminiFallback(codeSnippet: string): Promise<SocraticChallenge> {
+    const geminiApiKey =
+        process.env.GEMINI_API_KEY ??
+        process.env.GOOGLE_API_KEY ??
+        process.env.GOOGLE_GENAI_API_KEY;
+
+    if (!geminiApiKey || geminiApiKey.trim().length === 0) {
+        throw new Error('Gemini fallback key is not configured in environment variables.');
+    }
+
+    const requestBody = JSON.stringify({
+        system_instruction: {
+            parts: [{ text: loadMasterSystemPrompt() }],
+        },
+        contents: [
+            {
+                role: 'user',
+                parts: [{ text: codeSnippet }],
+            },
+        ],
+        generationConfig: {
+            temperature: 0,
+        },
+    });
+
+    const rawResponse = await postJsonWithTimeout(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(geminiApiKey)}`,
+        {
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(requestBody),
+        },
+        requestBody
+    );
+
+    const parsedResponse = JSON.parse(rawResponse) as {
+        candidates?: Array<{
+            content?: {
+                parts?: Array<{ text?: string }>;
+            };
+        }>;
+    };
+
+    const modelText = parsedResponse.candidates?.[0]?.content?.parts?.find((part) => typeof part.text === 'string')?.text;
+    if (!modelText) {
+        throw new Error('Gemini response did not include text content.');
+    }
+
+    return parseSocraticChallengeFromText(modelText);
+}
+
+export async function generateSocraticChallenge(codeSnippet: string, userProvidedClaudeKey: string): Promise<SocraticChallenge> {
+    try {
+        return await callClaudePrimary(codeSnippet, userProvidedClaudeKey);
+    } catch (claudeError) {
+        console.warn('Claude primary call failed, switching to Gemini fallback.', claudeError);
+        try {
+            return await callGeminiFallback(codeSnippet);
+        } catch (geminiError) {
+            console.error('Gemini fallback also failed.', geminiError);
+            throw new Error('Failed to generate Socratic challenge from both Claude and Gemini.');
+        }
+    }
+}
+
 // Create the blur decoration type.
 // VS Code's decoration API does not strictly support arbitrary CSS that changes layout,
 // but we can use opacity and letter-spacing to visually approximate blurred/unreadable text,
@@ -78,6 +284,7 @@ export const blurDecorationType = vscode.window.createTextEditorDecorationType({
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Congratulations, your extension "vibe-check-extenstion" is now active!');
+    extensionRootPath = context.extensionUri.fsPath;
 
     const redisImportTrigger = 'import redis';
 

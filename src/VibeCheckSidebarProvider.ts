@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
-import * as https from 'https';
-import { clearActiveBlurDecorations, getBlurredTextFromDecorations } from './extension';
-
-type SocraticChallenge = {
-    question: string;
-    options: string[];
-    correctIndex: number;
-    explanation: string;
-};
+import {
+    clearActiveBlurDecorations,
+    generateSocraticChallenge,
+    getBlurredTextFromDecorations,
+    SocraticChallenge,
+} from './extension';
 
 export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
     private view: vscode.WebviewView | undefined;
@@ -65,8 +62,7 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
         this.postStatus('Generating Socratic question from Claude 3.5 Sonnet...', 'info');
 
         try {
-            const systemPrompt = await this.loadSystemPrompt();
-            const challenge = await this.requestSocraticChallenge(apiKey, systemPrompt, blurredCode);
+            const challenge = await generateSocraticChallenge(blurredCode, apiKey);
             this.currentChallenge = challenge;
 
             this.view?.webview.postMessage({
@@ -109,126 +105,6 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
             explanation: this.currentChallenge.explanation,
         });
         this.postStatus('Incorrect answer. Review and try again.', 'error');
-    }
-
-    private async loadSystemPrompt(): Promise<string> {
-        const promptFileUri = vscode.Uri.joinPath(this._extensionUri, 'master-system-prompt.json');
-        const promptFileBytes = await vscode.workspace.fs.readFile(promptFileUri);
-        const promptFileText = Buffer.from(promptFileBytes).toString('utf8');
-        const parsed = JSON.parse(promptFileText) as { system?: unknown };
-
-        if (typeof parsed.system !== 'string' || parsed.system.trim().length === 0) {
-            throw new Error('master-system-prompt.json is missing a valid system prompt.');
-        }
-
-        return parsed.system;
-    }
-
-    private async requestSocraticChallenge(
-        apiKey: string,
-        systemPrompt: string,
-        codeSnippet: string
-    ): Promise<SocraticChallenge> {
-        const requestBody = JSON.stringify({
-            model: 'claude-3-5-sonnet-20241022',
-            max_tokens: 600,
-            temperature: 0,
-            system: systemPrompt,
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'text',
-                            text: codeSnippet,
-                        },
-                    ],
-                },
-            ],
-        });
-
-        const rawResponse = await this.postAnthropicRequest(apiKey, requestBody);
-        const parsedResponse = JSON.parse(rawResponse) as {
-            content?: Array<{ type?: string; text?: string }>;
-        };
-
-        const modelText = parsedResponse.content?.find((item) => item.type === 'text')?.text;
-        if (!modelText) {
-            throw new Error('Claude response did not include text content.');
-        }
-
-        return this.parseChallengeFromModelText(modelText);
-    }
-
-    private postAnthropicRequest(apiKey: string, requestBody: string): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const req = https.request(
-                'https://api.anthropic.com/v1/messages',
-                {
-                    method: 'POST',
-                    headers: {
-                        'content-type': 'application/json',
-                        'content-length': Buffer.byteLength(requestBody),
-                        'x-api-key': apiKey,
-                        'anthropic-version': '2023-06-01',
-                    },
-                },
-                (res) => {
-                    let responseData = '';
-                    res.on('data', (chunk) => {
-                        responseData += chunk;
-                    });
-                    res.on('end', () => {
-                        if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-                            reject(new Error(`Anthropic API request failed (${res.statusCode ?? 'unknown'}): ${responseData}`));
-                            return;
-                        }
-                        resolve(responseData);
-                    });
-                }
-            );
-
-            req.on('error', (err) => reject(err));
-            req.write(requestBody);
-            req.end();
-        });
-    }
-
-    private parseChallengeFromModelText(modelText: string): SocraticChallenge {
-        const jsonMatch = modelText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error('Claude response did not contain a JSON object.');
-        }
-
-        const parsed = JSON.parse(jsonMatch[0]) as {
-            question?: unknown;
-            options?: unknown;
-            correctIndex?: unknown;
-            explanation?: unknown;
-        };
-
-        if (typeof parsed.question !== 'string' || parsed.question.trim().length === 0) {
-            throw new Error('Challenge JSON is missing a valid question.');
-        }
-
-        if (!Array.isArray(parsed.options) || parsed.options.length < 2 || !parsed.options.every((option) => typeof option === 'string')) {
-            throw new Error('Challenge JSON is missing a valid options array.');
-        }
-
-        if (typeof parsed.correctIndex !== 'number' || parsed.correctIndex < 0 || parsed.correctIndex >= parsed.options.length) {
-            throw new Error('Challenge JSON has an invalid correctIndex.');
-        }
-
-        if (typeof parsed.explanation !== 'string' || parsed.explanation.trim().length === 0) {
-            throw new Error('Challenge JSON is missing a valid explanation.');
-        }
-
-        return {
-            question: parsed.question,
-            options: parsed.options,
-            correctIndex: parsed.correctIndex,
-            explanation: parsed.explanation,
-        };
     }
 
     private postStatus(text: string, kind: 'info' | 'success' | 'error'): void {
