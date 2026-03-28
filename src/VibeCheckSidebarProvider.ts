@@ -38,6 +38,13 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     this.handleAnswerSubmission(Number(data.selectedIndex));
                     break;
                 }
+                case 'emergencyBypass': {
+                    await vscode.commands.executeCommand('vibecheck.emergencyBypass');
+                    this.currentChallenge = undefined;
+                    this.view?.webview.postMessage({ type: 'challengeReset' });
+                    this.postStatus('Emergency Bypass applied. Blur removed instantly.', 'error');
+                    break;
+                }
             }
         });
     }
@@ -295,6 +302,14 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                         opacity: 0.5;
                         cursor: not-allowed;
                     }
+                    .btn-danger {
+                        background-color: var(--vscode-inputValidation-errorBackground);
+                        color: var(--vscode-inputValidation-errorForeground);
+                        margin-top: 8px;
+                    }
+                    .btn-danger:hover {
+                        background-color: var(--vscode-inputValidation-errorBorder);
+                    }
                     .options {
                         margin: 12px 0;
                         display: grid;
@@ -340,6 +355,7 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     <p class="question" id="question-text">Generate a challenge to verify comprehension of the blurred code.</p>
                     <div class="options" id="options"></div>
                     <button class="btn" id="submit-answer" disabled>Submit Answer</button>
+                    <button class="btn btn-danger" id="emergency-bypass">Emergency Bypass</button>
                     <p class="hint" id="explanation"></p>
                     <div class="status info" id="status">Waiting for a challenge.</div>
                 </div>
@@ -350,6 +366,7 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                     const apiKeyInput = document.getElementById('api-key');
                     const generateButton = document.getElementById('generate-btn');
                     const submitButton = document.getElementById('submit-answer');
+                    const bypassButton = document.getElementById('emergency-bypass');
                     const questionText = document.getElementById('question-text');
                     const optionsContainer = document.getElementById('options');
                     const explanation = document.getElementById('explanation');
@@ -406,6 +423,10 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
                         });
                     });
 
+                    bypassButton.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'emergencyBypass' });
+                    });
+
                     window.addEventListener('message', (event) => {
                         const data = event.data;
 
@@ -430,6 +451,13 @@ export class VibeCheckSidebarProvider implements vscode.WebviewViewProvider {
 
                         if (data.type === 'status') {
                             setStatus(data.text, data.kind || 'info');
+                        }
+
+                        if (data.type === 'challengeReset') {
+                            questionText.textContent = 'Challenge bypassed. Generate a new challenge when ready.';
+                            optionsContainer.innerHTML = '';
+                            explanation.textContent = '';
+                            submitButton.disabled = true;
                         }
                     });
                 </script>

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { VibeCheckSidebarProvider } from './VibeCheckSidebarProvider';
 
 // Module-level variable to store our active blur decorations.
@@ -32,6 +34,33 @@ export function clearActiveBlurDecorations(): void {
         }
     }
     activeBlurDecorations.length = 0;
+}
+
+function clearBlurDecorationForActiveEditor(editor: vscode.TextEditor): void {
+    editor.setDecorations(blurDecorationType, []);
+    activeBlurDecorations = activeBlurDecorations.filter(
+        (entry) => entry.editor.document.uri.toString() !== editor.document.uri.toString()
+    );
+}
+
+function appendEmergencyBypassDebtLog(editor: vscode.TextEditor): void {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+        return;
+    }
+
+    const debtLogPath = path.join(workspaceRoot, 'VIBE_DEBT.md');
+    const timestamp = new Date().toISOString();
+    const activeFileName = path.basename(editor.document.fileName);
+    const header = '| Timestamp | Active File | Reason |\n| --- | --- | --- |\n';
+    const row = `| ${timestamp} | ${activeFileName} | Emergency Bypass |\n`;
+
+    if (!fs.existsSync(debtLogPath)) {
+        fs.writeFileSync(debtLogPath, header + row, 'utf8');
+        return;
+    }
+
+    fs.appendFileSync(debtLogPath, row, 'utf8');
 }
 
 // Create the blur decoration type.
@@ -88,6 +117,18 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('vibecheck.sidebarView.focus');
     });
 
+    const emergencyBypassCommand = vscode.commands.registerCommand('vibecheck.emergencyBypass', () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showInformationMessage('No active editor found for Emergency Bypass.');
+            return;
+        }
+
+        clearBlurDecorationForActiveEditor(editor);
+        appendEmergencyBypassDebtLog(editor);
+        vscode.window.showWarningMessage('Emergency Bypass used. Blur removed and VIBE_DEBT.md updated.');
+    });
+
     const changeListener = vscode.workspace.onDidChangeTextDocument(async (event) => {
         if (event.contentChanges.length === 0) {
             return;
@@ -124,6 +165,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(analyzeCommand);
+    context.subscriptions.push(emergencyBypassCommand);
     context.subscriptions.push(changeListener);
 }
 

@@ -17,6 +17,10 @@
       {
         "command": "vibecheck.analyzeBlock",
         "title": "Vibe Check: Analyze Block"
+      },
+      {
+        "command": "vibecheck.emergencyBypass",
+        "title": "Vibe Check: Emergency Bypass"
       }
     ],
     "viewsContainers": {
