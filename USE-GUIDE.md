@@ -29,11 +29,11 @@ npm run compile
 ## 5. Useful dev commands
 
 ```bash
-npm run watch
+npm run watch #purpose: 
 ```
 
 ```bash
-npm run lint
+npm run lint #purpose: 
 ```
 
 ## 6. Package extension (optional)
