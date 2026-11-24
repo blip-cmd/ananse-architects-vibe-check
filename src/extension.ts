@@ -232,8 +232,7 @@ export async function callGeminiFallback(codeSnippet: string): Promise<SocraticC
     // Ensure .env is loaded in the active extension host process.
     loadWorkspaceEnv();
 
-    // User-requested direct fallback key to avoid environment loading issues in Extension Host.
-    const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || 'AIzaSyDKQsSWuGhQDuvtKI25d51tz2R5UuEozG0';
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
 
     if (!geminiApiKey) {
         throw new Error('GEMINI_API_KEY is not configured in .env at workspace root.');
